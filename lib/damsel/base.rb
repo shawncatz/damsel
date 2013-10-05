@@ -6,10 +6,11 @@ module Damsel
 
     def method_missing(method, *args, &block)
       m = method.to_sym
-      raise "unknown attribute #{method}: #{@data.inspect}" unless @data[m]
+      #puts "method_missing: #{m} #{args.inspect}"
+      raise "#{self.class.name}: unknown attribute #{method}: #{@data.inspect}" unless @data[m]
       o = @data[m]
 
-      if o[:type] == :array
+      if o[:type] == Array
         #puts "setting #{m} << #{args.first}"
         o[:value] << args.first
       elsif o[:type] == :child
@@ -17,9 +18,10 @@ module Damsel
 
         k = o[:klass].constantize
         obj = k.new
+        obj.name(args.first) if args.count > 0
 
         if obj.is_a?(Damsel::Data)
-          obj.instance_eval &block
+          obj.instance_eval &block if block_given?
         elsif obj.is_a?(Damsel::Exec)
           obj.block block
           obj.save block
@@ -28,13 +30,15 @@ module Damsel
         if o[:many]
           if o[:named]
             o[:value] ||= {}
-            o[:value][args.first.to_sym] = obj.to_hash
+            a = args.first.to_sym
+            raise "setting more than one #{method}[#{a}]: previous: #{o[:value][a]}" if o[:value][a]
+            o[:value][a] = obj
           else
-            o[:value] << obj.to_hash
+            o[:value] << obj
           end
         else
           raise "setting more than one #{method}: previous: #{o[:value].inspect}" if o[:value]
-          o[:value] = obj.to_hash
+          o[:value] = obj
         end
       else
         #puts "setting #{m} = #{args.first}"
@@ -54,7 +58,20 @@ module Damsel
       @hash ||= begin
         out = {}
         @data.each do |k, v|
-          out[k] = v[:value]
+          val = v[:value]
+          if val.is_a?(Array)
+            out[k] = []
+            val.each do |e|
+              out[k] << (e.respond_to?(:to_hash) ? e.to_hash : e)
+            end
+          elsif val.is_a?(Hash)
+            out[k] = {}
+            val.each do |vk, e|
+              out[k][vk] = (e.respond_to?(:to_hash) ? e.to_hash : e)
+            end
+          else
+            out[k] = val.respond_to?(:to_hash) ? val.to_hash : val
+          end
         end
         out
       end
@@ -78,7 +95,7 @@ module Damsel
         }.merge(options)
         #puts "ATTR: #{name} - #{o.inspect}"
 
-        if o[:type] == :array
+        if o[:type] == Array
           n = name.to_s.singularize.to_sym
           o[:value] = [] unless o[:value]
         else
