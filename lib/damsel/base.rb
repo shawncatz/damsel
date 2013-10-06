@@ -1,49 +1,20 @@
+require "damsel/attribute_set"
+require "damsel/attribute"
+
 module Damsel
   class Base
-    def initialize
-      @data = Marshal.load(Marshal.dump(self.class.attrs))
+    def initialize(name)
+      @name = name
+      @data = {}
+      @names = []
     end
 
-    def method_missing(method, *args, &block)
-      m = method.to_sym
-      #puts "method_missing: #{m} #{args.inspect}"
-      raise "#{self.class.name}: unknown attribute #{method}: #{@data.inspect}" unless @data[m]
-      o = @data[m]
+    def attrs
+      self.class.attrs
+    end
 
-      if o[:type] == Array
-        #puts "setting #{m} << #{args.first}"
-        o[:value] << args.first
-      elsif o[:type] == :child
-        #puts "setting child #{m} << #{o[:klass]} #{args.first}"
-
-        k = o[:klass].constantize
-        obj = k.new
-        obj.name(args.first) if args.count > 0
-
-        if obj.is_a?(Damsel::Data)
-          obj.instance_eval &block if block_given?
-        elsif obj.is_a?(Damsel::Exec)
-          obj.block block
-          obj.save block
-        end
-
-        if o[:many]
-          if o[:named]
-            o[:value] ||= {}
-            a = args.first.to_sym
-            raise "setting more than one #{method}[#{a}]: previous: #{o[:value][a]}" if o[:value][a]
-            o[:value][a] = obj
-          else
-            o[:value] << obj
-          end
-        else
-          raise "setting more than one #{method}: previous: #{o[:value].inspect}" if o[:value]
-          o[:value] = obj
-        end
-      else
-        #puts "setting #{m} = #{args.first}"
-        o[:value] = args.first
-      end
+    def [](name)
+      @data[name.to_sym]
     end
 
     def validate!
@@ -54,32 +25,33 @@ module Damsel
       raise "validation failed: #{e.message} at #{e.backtrace.first}"
     end
 
-    def to_hash
-      @hash ||= begin
-        out = {}
-        @data.each do |k, v|
-          val = v[:value]
-          if val.is_a?(Array)
-            out[k] = []
-            val.each do |e|
-              out[k] << (e.respond_to?(:to_hash) ? e.to_hash : e)
-            end
-          elsif val.is_a?(Hash)
-            out[k] = {}
-            val.each do |vk, e|
-              out[k][vk] = (e.respond_to?(:to_hash) ? e.to_hash : e)
-            end
-          else
-            out[k] = val.respond_to?(:to_hash) ? val.to_hash : val
-          end
-        end
-        out
-      end
+    def data
+      to_hash(@data)
     end
 
-    #def to_mash
-    #  Hashie::Mash.new(to_hash)
-    #end
+    def to_hash(value)
+      if value.is_a?(Damsel::Base)
+        #puts "BASE:#{value.inspect}"
+        value.data
+      elsif value.is_a?(Hash)
+        #puts "HASH:#{value.inspect}"
+        out = {}
+        value.each do |k, v|
+          out[k] = to_hash(v)
+        end
+        out
+      elsif value.is_a?(Array)
+        #puts "ARRAY:#{value.inspect}"
+        out = []
+        value.each do |e|
+          #puts "ARRAY:#{e}:"
+          out << to_hash(e)
+        end
+        out
+      else
+        value
+      end
+    end
 
     class << self
       @attrs = {}
@@ -87,36 +59,59 @@ module Damsel
       attr_accessor :search_module
 
       def attribute(name, options={}, &block)
-        n = name.to_sym
-        o = {
+        name = name.to_sym
+        options = {
             value: nil,
             type: :string,
             klass: nil
         }.merge(options)
         #puts "ATTR: #{name} - #{o.inspect}"
 
-        if o[:type] == Array
-          n = name.to_s.singularize.to_sym
-          o[:value] = [] unless o[:value]
-        else
-          if o[:type] == :child
-            if o[:many]
-              if o[:named]
-                o[:value] = {} unless o[:value]
-              else
-                o[:value] = [] unless o[:value]
-              end
-            else
-              o[:value] = nil
-            end
+        name = name.to_s.singularize.to_sym if options[:type] == Array
+        options[:block] = block if block_given?
+
+        @attrs ||= Damsel::AttributeSet.new
+        @attrs << Damsel::Attribute.new(name, options)
+
+        define_method name, ->(value=nil, &b) do
+          attr = attrs[name]
+          @data[name] ||= attr.default ? attr.default.dup : nil
+
+          if attr.block
+            valid = attr.block.call(value)
+            raise "validation for #{name} failed: #{attr.block}" unless valid
           end
 
+          if attr.type == Array
+            @data[name] << value
+          elsif attr.type == :child
+            k = attr.klass.constantize
+            obj = k.new(name)
+            obj.name value if value
+
+            if attr.many?
+              if attr.named?
+                value = value.to_sym
+                raise "setting more than one #{name}[#{value}]: previous: #{@data[name]}" if @names.include?("#{name}#{value}")
+                @names << "#{name}#{value}"
+                @data[name] << obj
+              else
+                @data[name] << obj
+              end
+            else
+              raise "setting more than one #{name}: previous: #{@data[name].inspect}" if @data[name].count > 0
+              @data[name] = obj
+            end
+
+            if obj.is_a?(Damsel::Data)
+              obj.instance_eval &b if b
+            elsif obj.is_a?(Damsel::Exec)
+              obj.save b
+            end
+          else
+            @data[name] = value
+          end
         end
-
-        o[:block] = block if block_given?
-
-        @attrs ||= {}
-        @attrs[n] = o
       end
 
       def has_one(name, options={})
