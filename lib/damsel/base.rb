@@ -26,18 +26,24 @@ module Damsel
     end
 
     def data
-      to_hash(@data)
+      raise "not used"
     end
 
-    def to_hash(value)
+    def to_hash
+      recursive_hash(@data)
+    end
+
+    private
+
+    def recursive_hash(value)
       if value.is_a?(Damsel::Base)
         #puts "BASE:#{value.inspect}"
-        value.data
+        value.to_hash
       elsif value.is_a?(Hash)
         #puts "HASH:#{value.inspect}"
         out = {}
         value.each do |k, v|
-          out[k] = to_hash(v)
+          out[k] = recursive_hash(v)
         end
         out
       elsif value.is_a?(Array)
@@ -45,7 +51,7 @@ module Damsel
         out = []
         value.each do |e|
           #puts "ARRAY:#{e}:"
-          out << to_hash(e)
+          out << recursive_hash(e)
         end
         out
       else
