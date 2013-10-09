@@ -81,6 +81,7 @@ module Damsel
 
         define_method name, ->(value=nil, &b) do
           attr = attrs[name]
+          return @data[name] unless value || b
           @data[name] ||= attr.default ? attr.default.dup : nil
 
           if attr.block
